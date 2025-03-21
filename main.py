@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from typing import cast
 from types import SimpleNamespace
 from bittensor.core.chain_data.utils import decode_metadata
+from datasets import load_dataset
 
 netuid = 68
 epoch_length = 360
@@ -19,85 +20,44 @@ class Response(BaseModel):
 
 import requests
 
-def set_repo_visibility(make_private: bool):
-    url = f"https://api.github.com/repos/tellorian/sn68_submit"
-    github_token = os.getenv("GITHUB_TOKEN")
-    headers = {
-        "Authorization": f"token {github_token}",
-        "Accept": "application/vnd.github.v3+json",
-    }
-    
-    payload = {"private": not make_private} 
-    
-    response = requests.patch(url, json=payload, headers=headers)
-
-    if response.status_code == 200:
-        print(f"Repository is now {'private' if not make_private else 'public'}.")
-    else:
-        print(f"Failed to update repository visibility: {response.status_code}")
-        print(response.json())  # Print error details
-
 async def _get_current_block(subtensor):
     global current_block
     current_block = await subtensor.get_current_block()
     return current_block
 
-async def get_commitments(subtensor, metagraph, block_hash):
-    global netuid
-    commits = await asyncio.gather(*[
-        subtensor.substrate.query(
-            module="Commitments",
-            storage_function="CommitmentOf",
-            params=[netuid, hotkey],
-            block_hash=block_hash,
-        ) for hotkey in metagraph.hotkeys
-    ])
+def get_index_in_range_from_blockhash(block_hash: str, range_max: int) -> int:
 
-    # Process the results and build a dictionary with additional metadata.
-    result = {}
-    for uid, hotkey in enumerate(metagraph.hotkeys):
-        commit = cast(dict, commits[uid])
-        if commit:
-            result[hotkey] = SimpleNamespace(
-                uid=uid,
-                hotkey=hotkey,
-                block=commit['block'],
-                data=decode_metadata(commit)
-            )
-    return result
+    block_hash_str = block_hash.lower().removeprefix('0x')
+    
+    # Convert the hex string to an integer
+    hash_int = int(block_hash_str, 16)
+
+        # Modulo by the desired range
+    random_index = hash_int % range_max
+
+    return random_index
+
+def get_protein_code_at_index(index: int) -> str:
+    
+    dataset = load_dataset("Metanova/Proteins", split="train")
+    row = dataset[index]  # 0-based indexing
+    return row["Entry"]
 
 async def get_current_block():
     global current_block, epoch_length, current_protein
     
-    while True:
-        async with bt.async_subtensor(network="local") as subtensor:
-            # Initialize and sync metagraph
-            metagraph = await subtensor.metagraph(netuid)
-            await metagraph.sync()
+    async with bt.async_subtensor(network="local") as subtensor:
+        while True:
             await _get_current_block(subtensor)
-            # set_repo_visibility(current_block % 360 > 357 or current_block % 360 < 7)
-            epoch_start = (current_block // epoch_length) * epoch_length
-
-            block_hash = await subtensor.determine_block_hash(current_block)
-            commits = await get_commitments(subtensor, metagraph, block_hash)
-
-            # Filter to keep only commits that occurred after or at epoch start
-            fresh_commits = {
-                hotkey: commit
-                for hotkey, commit in commits.items()
-                if commit.block > epoch_start
-            }
-            if not fresh_commits:
-                print(f"No commits found in block window [{epoch_start}, {current_block}].")
-                await asyncio.sleep(6)
-                continue
-
-            highest_stake_commit = max(
-                fresh_commits.values(),
-                key=lambda c: metagraph.S[c.uid],
-                default=None
-            )
-            current_protein = highest_stake_commit.data if highest_stake_commit else None
+            if (current_protein is None or current_block % 360 == 0):
+                epoch_start = (current_block // epoch_length) * epoch_length
+                current_block_hash = await subtensor.determine_block_hash(epoch_start)
+                prev_block_hash = await subtensor.determine_block_hash(epoch_start - 1)
+                target_random_index = get_index_in_range_from_blockhash(current_block_hash, 179620)
+                antitarget_random_index = get_index_in_range_from_blockhash(prev_block_hash, 179620)
+                target_protein_code = get_protein_code_at_index(target_random_index)
+                antitarget_protein_code = get_protein_code_at_index(antitarget_random_index)
+                current_protein = f"{target_protein_code}|{antitarget_protein_code}"
             print(f"current_block: {current_block}, current_protein:{current_protein}")
             await asyncio.sleep(4)
 
