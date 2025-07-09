@@ -68,16 +68,16 @@ def get_challenge_proteins_from_blockhash(block_hash: str, num_targets: int, num
 async def get_current_block():
     global current_block, epoch_length, current_protein, current_indices
     
-    async with bt.async_subtensor(network="local") as subtensor:
+    async with bt.async_subtensor(network="finney") as subtensor:
         while True:
             await _get_current_block(subtensor)
             if (current_protein is None or current_block % epoch_length == 0):
                 epoch_start = (current_block // epoch_length) * epoch_length
                 current_block_hash = await subtensor.determine_block_hash(epoch_start)
-                challenge_proteins, current_indices = get_challenge_proteins_from_blockhash(current_block_hash, 1, 3)
+                challenge_proteins, current_indices = get_challenge_proteins_from_blockhash(current_block_hash, 1, 7)
                 current_protein = "|".join(challenge_proteins)
             print(f"current_block: {current_block}, current_protein:{current_protein}")
-            await asyncio.sleep(4)
+            await asyncio.sleep(2)
 
 async def main():
     await get_current_block()
